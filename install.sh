@@ -54,6 +54,7 @@ APP_PORT=45821
 mkdir -p "$CONFIG_DIR"
 mkdir -p "$APP_DIR"
 
+# jq & Python leise installieren
 apt-get update -qq >/dev/null 2>&1
 apt-get install -qq jq python3 python3-pip >/dev/null 2>&1
 
@@ -198,7 +199,7 @@ systemctl start eduxel  >/dev/null 2>&1
 #  eduxel CLI Tool
 ########################
 
-cat > /usr/bin/eduxel <<EOF
+cat > /usr/bin/eduxel <<'EOF'
 #!/bin/bash
 
 RESET="\e[0m"
@@ -212,81 +213,141 @@ LOGO5="\e[38;5;27mâ–Œâ–ˆâ–ˆâ–ˆâ–ˆâ–ˆâ–ˆâ–${RESE
 
 SERVICE="eduxel"
 CFG="/etc/eduxel/config.json"
+APP_DIR="/opt/eduxel"
+CONFIG_DIR="/etc/eduxel"
+SERVICE_FILE="/etc/systemd/system/eduxel.service"
+BIN="/usr/bin/eduxel"
 
-if [[ "\$1" == "info" || "\$1" == "-info" ]]; then
-mode=\$(jq -r '.mode' "\$CFG")
-port=\$(jq -r '.app.port' "\$CFG")
-secret=\$(jq -r '.app.secret' "\$CFG")
-host=\$(jq -r '.database.host' "\$CFG")
-db=\$(jq -r '.database.database' "\$CFG")
+die_no_root() {
+  if [[ "$EUID" -ne 0 ]]; then
+    echo "Bitte als root ausführen (oder mit sudo)."
+    exit 1
+  fi
+}
 
-printf "%b   ${BOLD}Eduxel Framework${RESET}\n" "\$LOGO1"
-printf "%b   Engine: python-service\n" "\$LOGO2"
-printf "%b   Version: v1.0.0\n" "\$LOGO3"
-printf "%b   Folder: /opt/eduxel\n" "\$LOGO4"
-printf "%b   Config: /etc/eduxel/config.json\n" "\$LOGO5"
-echo  "          Service: \$SERVICE.service"
-echo  "          Mode: \$mode"
-echo  "          API-Port: \$port"
-echo  "          Secret: \$secret"
+usage() {
+  echo "Eduxel CLI"
+  echo "Usage:"
+  echo "  eduxel info"
+  echo "  eduxel start|stop|restart|status"
+  echo "  eduxel uninstall"
+  echo "  eduxel reset"
+}
 
-if [[ "\$mode" == "auto" ]]; then
-    echo "          DB: mysql://\$host/\$db"
+if [[ "$1" == "info" || "$1" == "-info" ]]; then
+  if [[ ! -f "$CFG" ]]; then
+    echo "config.json nicht gefunden unter $CFG"
+    exit 1
+  fi
+
+  mode=$(jq -r '.mode' "$CFG")
+  port=$(jq -r '.app.port' "$CFG")
+  secret=$(jq -r '.app.secret' "$CFG")
+  host=$(jq -r '.database.host' "$CFG")
+  db=$(jq -r '.database.database' "$CFG")
+
+  printf "%b   ${BOLD}Eduxel Framework${RESET}\n" "$LOGO1"
+  printf "%b   Engine: python-service\n" "$LOGO2"
+  printf "%b   Version: v1.0.0\n" "$LOGO3"
+  printf "%b   Folder: /opt/eduxel\n" "$LOGO4"
+  printf "%b   Config: /etc/eduxel/config.json\n" "$LOGO5"
+  echo  "          Service: eduxel.service"
+  echo  "          Mode: $mode"
+  echo  "          API-Port: $port"
+  echo  "          Secret: $secret"
+
+  if [[ "$mode" == "auto" ]]; then
+    echo "          DB: mysql://$host/$db"
+  fi
+
+  exit 0
 fi
 
-exit 0
-fi
-
-case "\$1" in
+case "$1" in
   start)
-    systemctl start "\$SERVICE"
-    echo "Eduxel Service gestartet."
+    die_no_root
+    systemctl start "$SERVICE"
+    echo "Eduxel gestartet."
     exit 0
     ;;
   stop)
-    systemctl stop "\$SERVICE"
-    echo "Eduxel Service gestoppt."
+    die_no_root
+    systemctl stop "$SERVICE"
+    echo "Eduxel gestoppt."
     exit 0
     ;;
   restart)
-    systemctl restart "\$SERVICE"
-    echo "Eduxel Service neu gestartet."
-    exit 0
-    ;;
-  enable)
-    systemctl enable "\$SERVICE"
-    echo "Autostart fÃ¼r Eduxel aktiviert."
-    exit 0
-    ;;
-  disable)
-    systemctl disable "\$SERVICE"
-    echo "Autostart fÃ¼r Eduxel deaktiviert."
+    die_no_root
+    systemctl restart "$SERVICE"
+    echo "Eduxel neu gestartet."
     exit 0
     ;;
   status)
-    systemctl status "\$SERVICE" --no-pager
+    systemctl status "$SERVICE" --no-pager
     exit 0
     ;;
-  uninstall|remove)
-    echo "Dieses Kommando deinstalliert Eduxel komplett (Service, Dateien, CLI)."
-    read -p "Fortfahren? (y/N): " confirm
-    if [[ "\$confirm" == "y" || "\$confirm" == "Y" ]]; then
-      systemctl stop "\$SERVICE" 2>/dev/null
-      systemctl disable "\$SERVICE" 2>/dev/null
-      rm -f /etc/systemd/system/eduxel.service
-      systemctl daemon-reload
-      rm -rf /opt/eduxel /etc/eduxel
-      rm -f /usr/bin/eduxel
-      echo "Eduxel wurde vollstÃ¤ndig entfernt."
-    else
+  uninstall)
+    die_no_root
+    echo "UNINSTALL: Entfernt Service, Config, App & CLI."
+    read -r -p "Wirklich deinstallieren? (y/N): " confirm
+    if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
       echo "Abgebrochen."
+      exit 0
     fi
+
+    systemctl stop "$SERVICE" >/dev/null 2>&1
+    systemctl disable "$SERVICE" >/dev/null 2>&1
+
+    rm -f "$SERVICE_FILE"
+    systemctl daemon-reload >/dev/null 2>&1
+
+    rm -rf "$APP_DIR" "$CONFIG_DIR"
+    rm -f "$BIN"
+
+    echo "Eduxel wurde entfernt."
     exit 0
+    ;;
+  reset)
+    die_no_root
+    echo "RESET: Setzt die Eduxel-Config zurück und erzeugt ein neues Secret."
+    echo "Dabei bleibt der Service installiert, aber /etc/eduxel/config.json wird neu erstellt."
+    echo ""
+
+    id="EDUXEL-RESET-$(date +%s)"
+    echo "Bestätigungs-ID: $id"
+    read -r -p "Tippe die ID exakt ein um fortzufahren: " typed
+    if [[ "$typed" != "$id" ]]; then
+      echo "Falsche ID. Abgebrochen."
+      exit 1
+    fi
+
+    if [[ ! -f "$CFG" ]]; then
+      echo "config.json nicht gefunden unter $CFG"
+      exit 1
+    fi
+
+    secret=$(openssl rand -hex 32 2>/dev/null)
+    if [[ -z "$secret" ]]; then
+      echo "openssl fehlt oder konnte kein Secret erzeugen."
+      exit 1
+    fi
+
+    tmp="${CFG}.tmp"
+    jq --arg sec "$secret" '.app.secret = $sec' "$CFG" > "$tmp" && mv "$tmp" "$CFG"
+
+    systemctl restart "$SERVICE" >/dev/null 2>&1
+    echo "Reset fertig. Neues Secret: $secret"
+    exit 0
+    ;;
+  ""|-h|--help|help)
+    usage
+    exit 0
+    ;;
+  *)
+    usage
+    exit 1
     ;;
 esac
-
-echo "Eduxel CLI"
-echo "Usage: eduxel info|start|stop|restart|enable|disable|status|uninstall"
 EOF
 
 chmod +x /usr/bin/eduxel
