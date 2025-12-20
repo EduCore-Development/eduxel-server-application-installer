@@ -40,7 +40,7 @@ echo ""
 read -r -p "> Auswahl (1/2): " OPTION
 
 apt-get update -qq >/dev/null 2>&1 || true
-apt-get install -qq jq python3 python3-pip openssl curl >/dev/null 2>&1 || true
+apt-get install -qq jq python3 openssl curl mariadb-client >/dev/null 2>&1 || true
 
 PUB_IP="$(curl -fsS https://api.ipify.org 2>/dev/null || true)"
 if [[ -z "${PUB_IP:-}" ]]; then
@@ -56,8 +56,8 @@ rand_db_pass() {
 
 db_exec_setup() {
   local cmd=""
-  if sudo mariadb -e "SELECT 1;" >/dev/null 2>&1; then
-    cmd="sudo mariadb"
+  if mariadb -e "SELECT 1;" >/dev/null 2>&1; then
+    cmd="mariadb"
   elif mysql -u root -e "SELECT 1;" >/dev/null 2>&1; then
     cmd="mysql -u root"
   else
@@ -77,7 +77,10 @@ db_exec_setup() {
 ensure_mariadb_remote() {
   if ! command -v mariadb >/dev/null 2>&1 && ! command -v mysql >/dev/null 2>&1; then
     apt-get install -qq mariadb-server >/dev/null 2>&1
+  else
+    apt-get install -qq mariadb-server >/dev/null 2>&1 || true
   fi
+
   systemctl enable mariadb >/dev/null 2>&1 || true
   systemctl start mariadb >/dev/null 2>&1 || true
 
@@ -99,27 +102,26 @@ ensure_mariadb_remote() {
 }
 
 SECRET="$(openssl rand -hex 32)"
-
-AUTO=false
+AUTO="false"
 DB_PASS=""
 
 if [[ "$OPTION" == "1" ]]; then
-  AUTO=true
+  AUTO="true"
   DB_PASS="$(rand_db_pass)"
 
   echo -e "\n${CYAN}➜ MariaDB wird eingerichtet (remote)...${RESET}"
   ensure_mariadb_remote
   MYSQL_CMD="$(db_exec_setup)"
 
-  $MYSQL_CMD <<EOF
+  $MYSQL_CMD <<EDUXELSQL
 CREATE DATABASE IF NOT EXISTS ${DB_NAME};
 CREATE USER IF NOT EXISTS '${DB_USER}'@'%' IDENTIFIED BY '${DB_PASS}';
 ALTER USER '${DB_USER}'@'%' IDENTIFIED BY '${DB_PASS}';
 GRANT ALL PRIVILEGES ON ${DB_NAME}.* TO '${DB_USER}'@'%';
 FLUSH PRIVILEGES;
-EOF
+EDUXELSQL
 
-  cat > "$CFG" <<EOF
+  cat > "$CFG" <<EDUXELCFG
 {
   "mode": "auto",
   "database": {
@@ -134,9 +136,9 @@ EOF
     "secret": "$SECRET"
   }
 }
-EOF
+EDUXELCFG
 else
-  cat > "$CFG" <<EOF
+  cat > "$CFG" <<EDUXELCFG
 {
   "mode": "manual",
   "database": {
@@ -151,10 +153,10 @@ else
     "secret": "$SECRET"
   }
 }
-EOF
+EDUXELCFG
 fi
 
-cat > "$APP_DIR/eduxel.py" << 'EOF'
+cat > "$APP_DIR/eduxel.py" <<'EDUXELPY'
 import json, socket
 
 CONFIG = "/etc/eduxel/config.json"
@@ -189,11 +191,11 @@ def start(cfg):
 if __name__ == "__main__":
     cfg = load()
     start(cfg)
-EOF
+EDUXELPY
 
 chmod +x "$APP_DIR/eduxel.py"
 
-cat > /etc/systemd/system/eduxel.service <<EOF
+cat > /etc/systemd/system/eduxel.service <<EDUXELSVC
 [Unit]
 Description=Eduxel Credential Server
 After=network.target
@@ -205,13 +207,13 @@ RestartSec=2
 
 [Install]
 WantedBy=multi-user.target
-EOF
+EDUXELSVC
 
 systemctl daemon-reload
 systemctl enable eduxel >/dev/null 2>&1 || true
 systemctl start eduxel >/dev/null 2>&1 || true
 
-cat > /usr/bin/eduxel <<'EOF'
+cat > /usr/bin/eduxel <<'EDUXELCLI'
 #!/bin/bash
 set -euo pipefail
 
@@ -240,8 +242,8 @@ usage() {
 }
 
 cmd_mysql() {
-  if sudo mariadb -e "SELECT 1;" >/dev/null 2>&1; then
-    echo "sudo mariadb"
+  if mariadb -e "SELECT 1;" >/dev/null 2>&1; then
+    echo "mariadb"
     return
   fi
   if mysql -u root -e "SELECT 1;" >/dev/null 2>&1; then
@@ -256,9 +258,7 @@ if [[ "${1:-}" == "info" || "${1:-}" == "-info" ]]; then
     echo "config.json nicht gefunden unter $CFG"
     exit 1
   fi
-  jq -r '
-    "Mode: \(.mode)\nAPI-Port: \(.app.port)\nSecret: \(.app.secret)\nDB: mysql://\(.database.user)@\(.database.host):\(.database.port)/\(.database.database)"
-  ' "$CFG"
+  jq -r '"Mode: \(.mode)\nAPI-Port: \(.app.port)\nSecret: \(.app.secret)\nDB: mysql://\(.database.user)@\(.database.host):\(.database.port)/\(.database.database)"' "$CFG"
   exit 0
 fi
 
@@ -335,16 +335,14 @@ case "${1:-}" in
         exit 1
       fi
 
-      $mysqlcmd <<EOF
+      $mysqlcmd <<EDUXELSQL2
 ALTER USER '${db_user}'@'%' IDENTIFIED BY '${new_pass}';
 GRANT ALL PRIVILEGES ON ${db_name}.* TO '${db_user}'@'%';
 FLUSH PRIVILEGES;
-EOF
+EDUXELSQL2
 
       tmp="${CFG}.tmp"
-      jq --arg sec "$new_secret" --arg pass "$new_pass" '
-        .app.secret=$sec | .database.password=$pass
-      ' "$CFG" > "$tmp" && mv "$tmp" "$CFG"
+      jq --arg sec "$new_secret" --arg pass "$new_pass" '.app.secret=$sec | .database.password=$pass' "$CFG" > "$tmp" && mv "$tmp" "$CFG"
 
       systemctl restart "$SERVICE" >/dev/null 2>&1 || true
       echo "OK"
@@ -367,7 +365,7 @@ EOF
     exit 1
     ;;
 esac
-EOF
+EDUXELCLI
 
 chmod +x /usr/bin/eduxel
 
@@ -390,7 +388,7 @@ if [[ "$AUTO" == "true" ]]; then
   echo "DB-Name:       $DB_NAME"
   echo "DB-Passwort:   $DB_PASS"
   echo ""
-  echo -e "${YELLOW}Wichtig:${RESET} Firewall/Provider muss Port 3306 erlauben, sonst kommt nie eine Verbindung."
+  echo -e "${YELLOW}Wichtig:${RESET} Port 3306 muss in Firewall/Provider offen sein."
 fi
 
 echo ""
