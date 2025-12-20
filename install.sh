@@ -1,8 +1,8 @@
 #!/bin/bash
+set -euo pipefail
 
-########################
-#  Farben
-########################
+export LANG=C.UTF-8
+export LC_ALL=C.UTF-8
 
 RESET="\e[0m"
 BOLD="\e[1m"
@@ -11,19 +11,20 @@ GREEN="\e[32m"
 YELLOW="\e[33m"
 GRAY="\e[90m"
 
-########################
-#  Gradient Logo
-########################
+CONFIG_DIR="/etc/eduxel"
+APP_DIR="/opt/eduxel"
+CFG="$CONFIG_DIR/config.json"
+APP_PORT=45821
 
-LOGO1="\e[38;5;51mâ–Œâ–ˆâ–ˆâ–ˆâ–ˆâ–ˆâ–ˆâ–${RESET}"
-LOGO2="\e[38;5;45mâ–Œâ–ˆ    â–ˆâ–${RESET}"
-LOGO3="\e[38;5;39mâ–Œâ–ˆâ–ˆâ–ˆâ–ˆâ–ˆâ–ˆâ–${RESET}"
-LOGO4="\e[38;5;33mâ–Œâ–ˆ    â–ˆâ–${RESET}"
-LOGO5="\e[38;5;27mâ–Œâ–ˆâ–ˆâ–ˆâ–ˆâ–ˆâ–ˆâ–${RESET}"
+DB_NAME="eduxel"
+DB_USER="eduxel"
 
-########################
-#  Header
-########################
+mkdir -p "$CONFIG_DIR" "$APP_DIR"
+
+if [[ "$EUID" -ne 0 ]]; then
+  echo -e "${YELLOW}Bitte als root ausführen (oder mit sudo).${RESET}"
+  exit 1
+fi
 
 clear
 echo -e "${CYAN}${BOLD}------------------------------------------"
@@ -33,108 +34,125 @@ echo ""
 echo -e "${BOLD}Willkommen zum Eduxel Installer.${RESET}"
 echo ""
 echo "MariaDB Setup:"
-echo "  1) Automatisch installieren & einrichten"
-echo "  2) Manuell (du trÃ¤gst DB spÃ¤ter selbst ein)"
+echo "  1) Automatisch installieren & remote DB einrichten"
+echo "  2) Manuell (du trägst DB später selbst ein)"
 echo ""
-read -p "> Auswahl (1/2): " OPTION
+read -r -p "> Auswahl (1/2): " OPTION
 
-########################
-#  Variablen
-########################
+apt-get update -qq >/dev/null 2>&1 || true
+apt-get install -qq jq python3 python3-pip openssl curl >/dev/null 2>&1 || true
 
-DB_NAME="eduxel"
-DB_USER="eduxel"
-DB_PASS=$(openssl rand -base64 24 | tr -dc 'A-Za-z0-9!@#$%^&*()_+=' | head -c 16)
+PUB_IP="$(curl -fsS https://api.ipify.org 2>/dev/null || true)"
+if [[ -z "${PUB_IP:-}" ]]; then
+  PUB_IP="$(hostname -I | awk '{print $1}' || true)"
+fi
+if [[ -z "${PUB_IP:-}" ]]; then
+  PUB_IP="127.0.0.1"
+fi
 
-CONFIG_DIR="/etc/eduxel"
-APP_DIR="/opt/eduxel"
-IP=$(hostname -I | awk '{print $1}')
-APP_PORT=45821
+rand_db_pass() {
+  openssl rand -base64 48 | tr -dc 'A-Za-z0-9!@#$%^&*()_+=-' | head -c 20
+}
 
-mkdir -p "$CONFIG_DIR"
-mkdir -p "$APP_DIR"
-
-# jq & Python leise installieren
-apt-get update -qq >/dev/null 2>&1
-apt-get install -qq jq python3 python3-pip >/dev/null 2>&1
-
-########################
-#  AUTO MODE
-########################
-
-if [ "$OPTION" = "1" ]; then
-    echo -e "\n${CYAN}âžœ MariaDB wird eingerichtet...${RESET}"
-
-    if ! command -v mariadb >/dev/null 2>&1 && ! command -v mysql >/dev/null 2>&1; then
-        apt-get install -qq mariadb-server >/dev/null 2>&1
-        systemctl enable mariadb >/dev/null 2>&1
-        systemctl start mariadb  >/dev/null 2>&1
+db_exec_setup() {
+  local cmd=""
+  if sudo mariadb -e "SELECT 1;" >/dev/null 2>&1; then
+    cmd="sudo mariadb"
+  elif mysql -u root -e "SELECT 1;" >/dev/null 2>&1; then
+    cmd="mysql -u root"
+  else
+    echo -e "${YELLOW}MariaDB root braucht ein Passwort.${RESET}"
+    read -r -s -p "MariaDB root Passwort: " MYSQL_ROOT_PASS
+    echo ""
+    if mysql -u root -p"$MYSQL_ROOT_PASS" -e "SELECT 1;" >/dev/null 2>&1; then
+      cmd="mysql -u root -p$MYSQL_ROOT_PASS"
+    else
+      echo -e "${YELLOW}DB Login fehlgeschlagen. Abbruch.${RESET}"
+      exit 1
     fi
+  fi
+  echo "$cmd"
+}
 
-    mysql -u root <<EOF
+ensure_mariadb_remote() {
+  if ! command -v mariadb >/dev/null 2>&1 && ! command -v mysql >/dev/null 2>&1; then
+    apt-get install -qq mariadb-server >/dev/null 2>&1
+  fi
+  systemctl enable mariadb >/dev/null 2>&1 || true
+  systemctl start mariadb >/dev/null 2>&1 || true
+
+  local cnf=""
+  if [[ -f /etc/mysql/mariadb.conf.d/50-server.cnf ]]; then
+    cnf="/etc/mysql/mariadb.conf.d/50-server.cnf"
+  elif [[ -f /etc/mysql/mysql.conf.d/mysqld.cnf ]]; then
+    cnf="/etc/mysql/mysql.conf.d/mysqld.cnf"
+  fi
+
+  if [[ -n "$cnf" ]]; then
+    if grep -qE '^[[:space:]]*bind-address' "$cnf"; then
+      sed -i 's/^[[:space:]]*bind-address.*/bind-address = 0.0.0.0/' "$cnf"
+    else
+      printf "\n[mysqld]\nbind-address = 0.0.0.0\n" >> "$cnf"
+    fi
+    systemctl restart mariadb >/dev/null 2>&1 || true
+  fi
+}
+
+SECRET="$(openssl rand -hex 32)"
+
+AUTO=false
+DB_PASS=""
+
+if [[ "$OPTION" == "1" ]]; then
+  AUTO=true
+  DB_PASS="$(rand_db_pass)"
+
+  echo -e "\n${CYAN}➜ MariaDB wird eingerichtet (remote)...${RESET}"
+  ensure_mariadb_remote
+  MYSQL_CMD="$(db_exec_setup)"
+
+  $MYSQL_CMD <<EOF
 CREATE DATABASE IF NOT EXISTS ${DB_NAME};
 CREATE USER IF NOT EXISTS '${DB_USER}'@'%' IDENTIFIED BY '${DB_PASS}';
+ALTER USER '${DB_USER}'@'%' IDENTIFIED BY '${DB_PASS}';
 GRANT ALL PRIVILEGES ON ${DB_NAME}.* TO '${DB_USER}'@'%';
 FLUSH PRIVILEGES;
 EOF
 
-    AUTO=true
-
-    cat > "$CONFIG_DIR/config.json" <<EOF
+  cat > "$CFG" <<EOF
 {
-    "mode": "auto",
-    "database": {
-        "host": "$IP",
-        "port": 3306,
-        "user": "$DB_USER",
-        "password": "$DB_PASS",
-        "database": "$DB_NAME"
-    },
-    "app": {
-        "port": $APP_PORT,
-        "secret": ""
-    }
+  "mode": "auto",
+  "database": {
+    "host": "$PUB_IP",
+    "port": 3306,
+    "user": "$DB_USER",
+    "password": "$DB_PASS",
+    "database": "$DB_NAME"
+  },
+  "app": {
+    "port": $APP_PORT,
+    "secret": "$SECRET"
+  }
 }
 EOF
-
-########################
-#  MANUAL MODE
-########################
-
 else
-    AUTO=false
-
-    cat > "$CONFIG_DIR/config.json" <<EOF
+  cat > "$CFG" <<EOF
 {
-    "mode": "manual",
-    "database": {
-        "host": "HIER_EINTRAGEN",
-        "port": 3306,
-        "user": "HIER_EINTRAGEN",
-        "password": "HIER_EINTRAGEN",
-        "database": "HIER_EINTRAGEN"
-    },
-    "app": {
-        "port": $APP_PORT,
-        "secret": ""
-    }
+  "mode": "manual",
+  "database": {
+    "host": "HIER_EINTRAGEN",
+    "port": 3306,
+    "user": "HIER_EINTRAGEN",
+    "password": "HIER_EINTRAGEN",
+    "database": "HIER_EINTRAGEN"
+  },
+  "app": {
+    "port": $APP_PORT,
+    "secret": "$SECRET"
+  }
 }
 EOF
 fi
-
-########################
-#  Secret IMMER erzeugen
-########################
-
-SECRET=$(openssl rand -hex 32)
-tmpfile="$CONFIG_DIR/config.tmp"
-
-jq --arg sec "$SECRET" '.app.secret = $sec' "$CONFIG_DIR/config.json" > "$tmpfile"
-mv "$tmpfile" "$CONFIG_DIR/config.json"
-
-########################
-#  Python Programm
-########################
 
 cat > "$APP_DIR/eduxel.py" << 'EOF'
 import json, socket
@@ -142,30 +160,31 @@ import json, socket
 CONFIG = "/etc/eduxel/config.json"
 
 def load():
-    with open(CONFIG, "r") as f:
+    with open(CONFIG, "r", encoding="utf-8") as f:
         return json.load(f)
 
 def start(cfg):
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    s.bind(("0.0.0.0", cfg["app"]["port"]))
-    s.listen(5)
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    s.bind(("0.0.0.0", int(cfg["app"]["port"])))
+    s.listen(20)
 
     sec = cfg["app"]["secret"]
-    print(f"[Eduxel] API lÃ¤uft auf Port {cfg['app']['port']}")
+    print(f"[Eduxel] API läuft auf Port {cfg['app']['port']}")
 
     while True:
         conn, _ = s.accept()
-        data = conn.recv(1024).decode().strip()
-
-        if data != sec:
-            conn.send(b"INVALID")
-        else:
-            db = cfg["database"]
-            conn.send(
-                f"OK;HOST={db['host']};PORT={db['port']};USER={db['user']};PASS={db['password']};DB={db['database']}".encode()
-            )
-
-        conn.close()
+        try:
+            data = conn.recv(1024).decode(errors="ignore").strip()
+            if data != sec:
+                conn.send(b"INVALID")
+            else:
+                db = cfg["database"]
+                conn.send(
+                    f"OK;HOST={db['host']};PORT={db['port']};USER={db['user']};PASS={db['password']};DB={db['database']}".encode()
+                )
+        finally:
+            conn.close()
 
 if __name__ == "__main__":
     cfg = load()
@@ -173,10 +192,6 @@ if __name__ == "__main__":
 EOF
 
 chmod +x "$APP_DIR/eduxel.py"
-
-########################
-#  systemd Service
-########################
 
 cat > /etc/systemd/system/eduxel.service <<EOF
 [Unit]
@@ -186,30 +201,19 @@ After=network.target
 [Service]
 ExecStart=/usr/bin/python3 $APP_DIR/eduxel.py
 Restart=always
+RestartSec=2
 
 [Install]
 WantedBy=multi-user.target
 EOF
 
 systemctl daemon-reload
-systemctl enable eduxel >/dev/null 2>&1
-systemctl start eduxel  >/dev/null 2>&1
-
-########################
-#  eduxel CLI Tool
-########################
+systemctl enable eduxel >/dev/null 2>&1 || true
+systemctl start eduxel >/dev/null 2>&1 || true
 
 cat > /usr/bin/eduxel <<'EOF'
 #!/bin/bash
-
-RESET="\e[0m"
-BOLD="\e[1m"
-
-LOGO1="\e[38;5;51mâ–Œâ–ˆâ–ˆâ–ˆâ–ˆâ–ˆâ–ˆâ–${RESET}"
-LOGO2="\e[38;5;45mâ–Œâ–ˆ    â–ˆâ–${RESET}"
-LOGO3="\e[38;5;39mâ–Œâ–ˆâ–ˆâ–ˆâ–ˆâ–ˆâ–ˆâ–${RESET}"
-LOGO4="\e[38;5;33mâ–Œâ–ˆ    â–ˆâ–${RESET}"
-LOGO5="\e[38;5;27mâ–Œâ–ˆâ–ˆâ–ˆâ–ˆâ–ˆâ–ˆâ–${RESET}"
+set -euo pipefail
 
 SERVICE="eduxel"
 CFG="/etc/eduxel/config.json"
@@ -219,7 +223,7 @@ SERVICE_FILE="/etc/systemd/system/eduxel.service"
 BIN="/usr/bin/eduxel"
 
 die_no_root() {
-  if [[ "$EUID" -ne 0 ]]; then
+  if [[ "${EUID:-999}" -ne 0 ]]; then
     echo "Bitte als root ausführen (oder mit sudo)."
     exit 1
   fi
@@ -230,61 +234,62 @@ usage() {
   echo "Usage:"
   echo "  eduxel info"
   echo "  eduxel start|stop|restart|status"
-  echo "  eduxel uninstall"
+  echo "  eduxel enable|disable"
   echo "  eduxel reset"
+  echo "  eduxel uninstall"
 }
 
-if [[ "$1" == "info" || "$1" == "-info" ]]; then
+cmd_mysql() {
+  if sudo mariadb -e "SELECT 1;" >/dev/null 2>&1; then
+    echo "sudo mariadb"
+    return
+  fi
+  if mysql -u root -e "SELECT 1;" >/dev/null 2>&1; then
+    echo "mysql -u root"
+    return
+  fi
+  echo ""
+}
+
+if [[ "${1:-}" == "info" || "${1:-}" == "-info" ]]; then
   if [[ ! -f "$CFG" ]]; then
     echo "config.json nicht gefunden unter $CFG"
     exit 1
   fi
-
-  mode=$(jq -r '.mode' "$CFG")
-  port=$(jq -r '.app.port' "$CFG")
-  secret=$(jq -r '.app.secret' "$CFG")
-  host=$(jq -r '.database.host' "$CFG")
-  db=$(jq -r '.database.database' "$CFG")
-
-  printf "%b   ${BOLD}Eduxel Framework${RESET}\n" "$LOGO1"
-  printf "%b   Engine: python-service\n" "$LOGO2"
-  printf "%b   Version: v1.0.0\n" "$LOGO3"
-  printf "%b   Folder: /opt/eduxel\n" "$LOGO4"
-  printf "%b   Config: /etc/eduxel/config.json\n" "$LOGO5"
-  echo  "          Service: eduxel.service"
-  echo  "          Mode: $mode"
-  echo  "          API-Port: $port"
-  echo  "          Secret: $secret"
-
-  if [[ "$mode" == "auto" ]]; then
-    echo "          DB: mysql://$host/$db"
-  fi
-
+  jq -r '
+    "Mode: \(.mode)\nAPI-Port: \(.app.port)\nSecret: \(.app.secret)\nDB: mysql://\(.database.user)@\(.database.host):\(.database.port)/\(.database.database)"
+  ' "$CFG"
   exit 0
 fi
 
-case "$1" in
+case "${1:-}" in
   start)
     die_no_root
     systemctl start "$SERVICE"
-    echo "Eduxel gestartet."
-    exit 0
+    echo "OK"
     ;;
   stop)
     die_no_root
     systemctl stop "$SERVICE"
-    echo "Eduxel gestoppt."
-    exit 0
+    echo "OK"
     ;;
   restart)
     die_no_root
     systemctl restart "$SERVICE"
-    echo "Eduxel neu gestartet."
-    exit 0
+    echo "OK"
     ;;
   status)
     systemctl status "$SERVICE" --no-pager
-    exit 0
+    ;;
+  enable)
+    die_no_root
+    systemctl enable "$SERVICE" >/dev/null 2>&1
+    echo "OK"
+    ;;
+  disable)
+    die_no_root
+    systemctl disable "$SERVICE" >/dev/null 2>&1
+    echo "OK"
     ;;
   uninstall)
     die_no_root
@@ -294,54 +299,68 @@ case "$1" in
       echo "Abgebrochen."
       exit 0
     fi
-
-    systemctl stop "$SERVICE" >/dev/null 2>&1
-    systemctl disable "$SERVICE" >/dev/null 2>&1
-
+    systemctl stop "$SERVICE" >/dev/null 2>&1 || true
+    systemctl disable "$SERVICE" >/dev/null 2>&1 || true
     rm -f "$SERVICE_FILE"
-    systemctl daemon-reload >/dev/null 2>&1
-
+    systemctl daemon-reload >/dev/null 2>&1 || true
     rm -rf "$APP_DIR" "$CONFIG_DIR"
     rm -f "$BIN"
-
-    echo "Eduxel wurde entfernt."
-    exit 0
+    echo "OK"
     ;;
   reset)
     die_no_root
-    echo "RESET: Setzt die Eduxel-Config zurück und erzeugt ein neues Secret."
-    echo "Dabei bleibt der Service installiert, aber /etc/eduxel/config.json wird neu erstellt."
-    echo ""
-
-    id="EDUXEL-RESET-$(date +%s)"
-    echo "Bestätigungs-ID: $id"
-    read -r -p "Tippe die ID exakt ein um fortzufahren: " typed
-    if [[ "$typed" != "$id" ]]; then
-      echo "Falsche ID. Abgebrochen."
-      exit 1
-    fi
-
     if [[ ! -f "$CFG" ]]; then
       echo "config.json nicht gefunden unter $CFG"
       exit 1
     fi
-
-    secret=$(openssl rand -hex 32 2>/dev/null)
-    if [[ -z "$secret" ]]; then
-      echo "openssl fehlt oder konnte kein Secret erzeugen."
+    id="EDUXEL-RESET-$(date +%s)"
+    echo "Bestätigungs-ID: $id"
+    read -r -p "Tippe die ID exakt ein um fortzufahren: " typed
+    if [[ "$typed" != "$id" ]]; then
+      echo "Falsche ID. Abbruch."
       exit 1
     fi
 
-    tmp="${CFG}.tmp"
-    jq --arg sec "$secret" '.app.secret = $sec' "$CFG" > "$tmp" && mv "$tmp" "$CFG"
+    mode="$(jq -r '.mode' "$CFG")"
+    new_secret="$(openssl rand -hex 32)"
 
-    systemctl restart "$SERVICE" >/dev/null 2>&1
-    echo "Reset fertig. Neues Secret: $secret"
-    exit 0
+    if [[ "$mode" == "auto" ]]; then
+      db_name="$(jq -r '.database.database' "$CFG")"
+      db_user="$(jq -r '.database.user' "$CFG")"
+      new_pass="$(openssl rand -base64 48 | tr -dc 'A-Za-z0-9!@#$%^&*()_+=-' | head -c 20)"
+
+      mysqlcmd="$(cmd_mysql)"
+      if [[ -z "$mysqlcmd" ]]; then
+        echo "Konnte MariaDB root nicht automatisch nutzen. Reset abgebrochen."
+        exit 1
+      fi
+
+      $mysqlcmd <<EOF
+ALTER USER '${db_user}'@'%' IDENTIFIED BY '${new_pass}';
+GRANT ALL PRIVILEGES ON ${db_name}.* TO '${db_user}'@'%';
+FLUSH PRIVILEGES;
+EOF
+
+      tmp="${CFG}.tmp"
+      jq --arg sec "$new_secret" --arg pass "$new_pass" '
+        .app.secret=$sec | .database.password=$pass
+      ' "$CFG" > "$tmp" && mv "$tmp" "$CFG"
+
+      systemctl restart "$SERVICE" >/dev/null 2>&1 || true
+      echo "OK"
+      echo "Neues Secret: $new_secret"
+      echo "Neues DB-Passwort: $new_pass"
+      exit 0
+    fi
+
+    tmp="${CFG}.tmp"
+    jq --arg sec "$new_secret" '.app.secret=$sec' "$CFG" > "$tmp" && mv "$tmp" "$CFG"
+    systemctl restart "$SERVICE" >/dev/null 2>&1 || true
+    echo "OK"
+    echo "Neues Secret: $new_secret"
     ;;
   ""|-h|--help|help)
     usage
-    exit 0
     ;;
   *)
     usage
@@ -352,41 +371,28 @@ EOF
 
 chmod +x /usr/bin/eduxel
 
-########################
-#  Finale Ausgabe
-########################
-
 echo ""
 echo -e "${GREEN}${BOLD}------------------------------------------"
-echo "        âœ“ Eduxel erfolgreich installiert!"
+echo "        ✓ Eduxel erfolgreich installiert!"
 echo -e "------------------------------------------${RESET}"
 echo ""
+echo -e "${BOLD}Server-IP:   ${RESET}$PUB_IP"
+echo -e "${BOLD}API-Port:    ${RESET}$APP_PORT"
+echo -e "${BOLD}Secret:      ${RESET}$SECRET"
+echo -e "${BOLD}Mode:        ${RESET}$( [[ "$AUTO" == "true" ]] && echo "auto (remote DB)" || echo "manual" )"
+echo ""
 
-printf "%b   ${BOLD}Eduxel installiert${RESET}\n" "$LOGO1"
-printf "%b   Server-IP:   %s\n" "$LOGO2" "$IP"
-printf "%b   API-Port:    %s\n" "$LOGO3" "$APP_PORT"
-printf "%b   Secret:      %s\n" "$LOGO4" "$SECRET"
-if [ "$AUTO" = true ]; then
-    printf "%b   Mode:        auto (DB automatisch erstellt)\n" "$LOGO5"
-else
-    printf "%b   Mode:        manual (DB manuell eintragen)\n" "$LOGO5"
+if [[ "$AUTO" == "true" ]]; then
+  echo -e "${GREEN}Remote DB Daten:${RESET}"
+  echo "DB-Host:       $PUB_IP"
+  echo "DB-Port:       3306"
+  echo "DB-User:       $DB_USER"
+  echo "DB-Name:       $DB_NAME"
+  echo "DB-Passwort:   $DB_PASS"
+  echo ""
+  echo -e "${YELLOW}Wichtig:${RESET} Firewall/Provider muss Port 3306 erlauben, sonst kommt nie eine Verbindung."
 fi
 
 echo ""
-
-if [ "$AUTO" = true ]; then
-    echo -e "${GREEN}Automatische DB-Einrichtung:${RESET}"
-    echo "DB-Host:       $IP"
-    echo "DB-Port:       3306"
-    echo "DB-User:       $DB_USER"
-    echo "DB-Name:       $DB_NAME"
-    echo "DB-Passwort:   $DB_PASS"
-else
-    echo -e "${YELLOW}MANUELLER MODUS:${RESET}"
-    echo "Trage deine DB-Daten ein in:"
-    echo "  $CONFIG_DIR/config.json"
-fi
-
-echo ""
-echo -e "${CYAN}Nutze '${BOLD}eduxel info${RESET}${CYAN}' fÃ¼r Status & Infos.${RESET}"
+echo -e "${CYAN}Nutze '${BOLD}eduxel info${RESET}${CYAN}' für Status & Infos.${RESET}"
 echo ""
