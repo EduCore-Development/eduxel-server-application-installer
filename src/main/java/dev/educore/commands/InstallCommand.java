@@ -10,9 +10,7 @@ import dev.educore.db.MariaDbManager;
 import dev.educore.dns.DnsChecker;
 import dev.educore.net.PublicIpResolver;
 import dev.educore.service.SystemdManager;
-import dev.educore.web.ApacheManager;
 import dev.educore.web.CaddyManager;
-import dev.educore.web.WebAppDeployer;
 import picocli.CommandLine.Command;
 import picocli.CommandLine.Option;
 
@@ -93,29 +91,41 @@ public class InstallCommand implements Runnable {
                 ConsoleUI.ok("DNS Check: OK");
             }
 
-            ApacheManager apache = new ApacheManager(pm);
-            apache.ensureInstalled();
-            apache.ensureListen8080();
-            apache.ensureVhost(domain, Path.of("/var/www", domain));
+            Path webRoot = Path.of("/var/www", domain);
+            new dev.educore.web.LandingPageWriter().write(webRoot, cfg, domain, publicIp);
+            ConsoleUI.ok("Landingpage erstellt: " + webRoot.resolve("index.html"));
 
             CaddyManager caddy = new CaddyManager(pm);
             caddy.ensureInstalled();
-            caddy.ensureSite(domain, "127.0.0.1", 8080);
+            caddy.ensureStaticSite(domain, webRoot);
             caddy.reload();
-
-            if (repo != null && !repo.isBlank()) {
-                WebAppDeployer deployer = new WebAppDeployer(pm);
-                deployer.deploy(repo, branch, Path.of("/var/www", domain));
-            } else {
-                ConsoleUI.warn("Kein --repo gesetzt: Website Deploy übersprungen.");
-            }
         } else {
             ConsoleUI.warn("Webstack übersprungen (--skip-web).");
         }
 
-        ConsoleUI.banner("✓ Install fertig");
+        printSummary(cfg, publicIp);
+    }
+
+    private void printSummary(AppConfig cfg, String publicIp) {
+        ConsoleUI.banner("✓ Setup fertig");
+
+        ConsoleUI.info("Server-IP: " + publicIp);
         ConsoleUI.info("Config: /etc/eduxel/config.json");
-        ConsoleUI.info("Service: systemctl status eduxel");
-        ConsoleUI.info("CLI: java -jar /opt/eduxel/eduxel.jar <command>");
+        ConsoleUI.info("Jar: /opt/eduxel/eduxel.jar");
+        ConsoleUI.info("CLI: eduxel info");
+        ConsoleUI.info("Service: systemctl status eduxel --no-pager");
+        ConsoleUI.info("Logs: journalctl -u eduxel -f");
+
+        ConsoleUI.banner("APP");
+        ConsoleUI.info("Port: " + cfg.app().port());
+        ConsoleUI.info("Secret: " + cfg.app().secret());
+
+        ConsoleUI.banner("DATABASE");
+        ConsoleUI.info("Mode: " + cfg.mode());
+        ConsoleUI.info("Host: " + cfg.database().host());
+        ConsoleUI.info("Port: " + cfg.database().port());
+        ConsoleUI.info("Database: " + cfg.database().database());
+        ConsoleUI.info("User: " + cfg.database().user());
+        ConsoleUI.info("Password: " + cfg.database().password());
     }
 }

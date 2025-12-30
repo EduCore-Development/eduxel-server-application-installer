@@ -13,7 +13,7 @@ import picocli.CommandLine.Command;
         description = "Eduxel Server Application Installer/Manager",
         subcommands = {
                 InstallCommand.class,
-                DeployWebCommand.class,
+                WebDashCommand.class,
                 ServeCommand.class,
                 InfoCommand.class,
                 ResetCommand.class,
