@@ -112,6 +112,7 @@ CLI verwenden:
 
 • eduxel info  
 • eduxel install  
+• eduxel update  
 • eduxel reset  
 
 ---
@@ -127,8 +128,56 @@ CLI verwenden:
 
 ## 🔄 Updates
 
-Updates erfolgen über GitHub Releases.  
-Ein erneuter Installationslauf lädt automatisch die neueste Version und startet den Service neu.
+### Automatisches Update-System
+
+Der `eduxel update` Befehl prüft automatisch auf Änderungen und führt notwendige Updates durch:
+
+```bash
+eduxel update
+```
+
+**Features:**
+
+• **Versionsprüfung**: Checkt ob eine neue Version verfügbar ist  
+• **Änderungserkennung**: Erkennt automatisch, was sich geändert hat:
+  - Landing Page (HTML/CSS/JS Updates)
+  - Service-Dateien (systemd)
+  - JAR-Dateien in /opt/eduxel/
+• **Interaktive Bestätigung**: Zeigt alle Änderungen an und fragt nach Bestätigung  
+• **Automatischer Modus**: Mit `--yes` oder `-y` alle Änderungen automatisch anwenden  
+• **Check-Only Modus**: Mit `--check-only` nur prüfen, keine Änderungen durchführen
+
+**Beispiele:**
+
+```bash
+# Interaktiv: Änderungen anzeigen und bestätigen
+eduxel update
+
+# Automatisch: Alle Updates ohne Nachfrage durchführen
+eduxel update -y
+
+# Nur prüfen: Keine Änderungen durchführen
+eduxel update --check-only
+```
+
+**Was wird geprüft:**
+
+1. **Version Check**: Vergleicht lokale Version mit neuester Version auf GitHub
+2. **Landing Page**: Prüft ob die Landing Page mit der aktuellen Version übereinstimmt
+3. **Service Files**: Prüft ob systemd Service-Dateien vorhanden und aktuell sind
+4. **JAR Installation**: Prüft ob eduxel.jar in /opt/eduxel/ vorhanden ist
+
+### Manuelle Updates
+
+Updates können auch manuell über GitHub Releases erfolgen:
+
+```bash
+# JAR herunterladen
+wget https://github.com/OWNER/REPO/releases/latest/download/eduxel.jar -O /opt/eduxel/eduxel.jar
+
+# Service neustarten
+systemctl restart eduxel
+```
 
 ---
 

@@ -18,6 +18,8 @@ public final class ConsoleUI {
     public static void ok(String msg) { System.out.println(Ansi.ansi().fgBrightGreen().a("✓ ").a(msg).reset()); }
     public static void info(String msg) { System.out.println(Ansi.ansi().fgBrightBlue().a("i ").a(msg).reset()); }
     public static void warn(String msg) { System.out.println(Ansi.ansi().fgBrightYellow().a("! ").a(msg).reset()); }
+    public static void error(String msg) { System.out.println(Ansi.ansi().fgBrightRed().a("✗ ").a(msg).reset()); }
+    public static void muted(String msg) { System.out.println(Ansi.ansi().fgBrightBlack().a(msg).reset()); }
 
     public static String ask(String prompt) {
         Console c = System.console();
