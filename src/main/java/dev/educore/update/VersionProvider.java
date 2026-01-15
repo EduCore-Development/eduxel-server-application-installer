@@ -11,7 +11,7 @@ public final class VersionProvider implements CommandLine.IVersionProvider {
         return new String[] { "eduxel " + UpdateChecker.localVersion() };
     }
 
-    static Properties props() {
+    public static Properties props() {
         try (InputStream in = VersionProvider.class.getClassLoader().getResourceAsStream("eduxel-version.properties")) {
             Properties p = new Properties();
             if (in != null) p.load(in);
