@@ -18,7 +18,7 @@ public final class UpdateChecker {
 
     public static Result check() {
         Properties p = VersionProvider.props();
-        String repo = p.getProperty("update.githubRepo", "").trim();
+        String repo = normalizeRepo(p.getProperty("update.githubRepo", "").trim());
         String url = p.getProperty("update.versionUrl", "").trim();
 
         if (repo.isBlank() && url.isBlank()) return new Result(Status.SKIPPED, "Keine Quelle gesetzt (update.githubRepo oder update.versionUrl).");
@@ -44,6 +44,23 @@ public final class UpdateChecker {
 
         if (cmp >= 0) return new Result(Status.UP_TO_DATE, local + " (latest: " + latest + ")");
         return new Result(Status.UPDATE_AVAILABLE, local + " -> " + latest);
+    }
+
+    private static String normalizeRepo(String repo) {
+        if (repo == null) return "";
+        repo = repo.trim();
+        if (repo.isBlank()) return "";
+        if (repo.startsWith("http")) {
+            int idx = repo.indexOf("github.com/");
+            if (idx >= 0) {
+                String tail = repo.substring(idx + "github.com/".length());
+                if (tail.endsWith(".git")) tail = tail.substring(0, tail.length() - 4);
+                String[] parts = tail.split("/");
+                if (parts.length >= 2) return parts[0] + "/" + parts[1];
+            }
+            return "";
+        }
+        return repo;
     }
 
     private static String fetch(String url) throws Exception {

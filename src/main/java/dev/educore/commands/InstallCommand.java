@@ -19,6 +19,9 @@ import java.nio.file.Path;
 @Command(name = "install", description = "Installiert Eduxel + optional Webstack (Caddy/Apache) + optional Web-Deploy.")
 public class InstallCommand implements Runnable {
 
+    @Option(names = {"--wizard"}, description = "Interaktiver Installations-Wizard")
+    boolean wizard;
+
     @Option(names = {"--app-port"}, description = "Port für Eduxel Credential Server", defaultValue = "45821")
     int appPort;
 
@@ -48,6 +51,10 @@ public class InstallCommand implements Runnable {
         Root.requireRoot();
 
         ConsoleUI.banner("E D U X E L  •  Installer");
+
+        if (wizard) {
+            runWizard();
+        }
 
         PackageManager pm = PackageManagers.detectOrThrow();
         ConsoleUI.ok("Package Manager: " + pm.name());
@@ -114,7 +121,7 @@ public class InstallCommand implements Runnable {
         ConsoleUI.info("Jar: /opt/eduxel/eduxel.jar");
         ConsoleUI.info("CLI: eduxel info");
         ConsoleUI.info("Service: systemctl status eduxel --no-pager");
-        ConsoleUI.info("Logs: journalctl -u eduxel -f");
+        ConsoleUI.info("Logs: eduxel logs --tail");
 
         ConsoleUI.banner("APP");
         ConsoleUI.info("Port: " + cfg.app().port());
@@ -128,4 +135,58 @@ public class InstallCommand implements Runnable {
         ConsoleUI.info("User: " + cfg.database().user());
         ConsoleUI.info("Password: " + cfg.database().password());
     }
+
+    private void runWizard() {
+        ConsoleUI.banner("Wizard");
+
+        appPort = askInt("App Port", appPort);
+
+        String db = askWithDefault("DB Mode (auto/manual)", dbMode);
+        if (!db.isBlank()) dbMode = db.trim();
+
+        boolean setupDb = askYesNo("MariaDB Setup aktivieren?", !skipMariaDb);
+        skipMariaDb = !setupDb;
+
+        boolean setupWeb = askYesNo("Webstack aktivieren (Caddy)?", !skipWeb);
+        skipWeb = !setupWeb;
+
+        if (!skipWeb) {
+            String d = askWithDefault("Domain", domain == null ? "" : domain);
+            if (!d.isBlank()) domain = d.trim();
+
+            String r = askWithDefault("Website Repo (optional)", repo == null ? "" : repo);
+            repo = r.isBlank() ? null : r.trim();
+
+            String b = askWithDefault("Branch", branch);
+            if (!b.isBlank()) branch = b.trim();
+
+            allowNoDns = askYesNo("DNS Mismatch erlauben?", allowNoDns);
+        }
+    }
+
+    private int askInt(String prompt, int defaultValue) {
+        String raw = askWithDefault(prompt, String.valueOf(defaultValue));
+        if (raw.isBlank()) return defaultValue;
+        try {
+            return Integer.parseInt(raw.trim());
+        } catch (NumberFormatException e) {
+            ConsoleUI.warn("Ungültige Zahl, nutze Default: " + defaultValue);
+            return defaultValue;
+        }
+    }
+
+    private String askWithDefault(String prompt, String defaultValue) {
+        String suffix = defaultValue == null || defaultValue.isBlank() ? "" : " [" + defaultValue + "]";
+        String answer = ConsoleUI.ask(prompt + suffix + ": ");
+        return answer == null || answer.isBlank() ? (defaultValue == null ? "" : defaultValue) : answer;
+    }
+
+    private boolean askYesNo(String prompt, boolean defaultYes) {
+        String hint = defaultYes ? "[J/n]" : "[j/N]";
+        String answer = ConsoleUI.ask(prompt + " " + hint + ": ");
+        if (answer == null || answer.isBlank()) return defaultYes;
+        String a = answer.trim().toLowerCase();
+        return a.equals("j") || a.equals("ja") || a.equals("y") || a.equals("yes");
+    }
+
 }

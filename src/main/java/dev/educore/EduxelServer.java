@@ -19,7 +19,9 @@ import picocli.CommandLine.Command;
                 ResetCommand.class,
                 UninstallCommand.class,
                 UpdateCheckCommand.class,
-                UpdateCommand.class
+                UpdateCommand.class,
+                LogsCommand.class,
+                DoctorCommand.class
         }
 )
 public class EduxelServer implements Runnable {

@@ -31,4 +31,13 @@ public final class ConfigManager {
             throw new IllegalStateException("Config lesen fehlgeschlagen: " + e.getMessage(), e);
         }
     }
+
+    public static AppConfig readOrThrow(Path path) {
+        try {
+            if (!Files.exists(path)) throw new IllegalStateException("config.json fehlt: " + path);
+            return M.readValue(path.toFile(), AppConfig.class);
+        } catch (Exception e) {
+            throw new IllegalStateException("Config lesen fehlgeschlagen: " + e.getMessage(), e);
+        }
+    }
 }

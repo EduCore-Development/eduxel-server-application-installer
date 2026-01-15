@@ -20,6 +20,11 @@ Kein manuelles Setup, kein Copy-Paste-Chaos, kein Gefrickel.
 • **Website-Deployment** (GitHub Repo → npm install → npm run build → Deploy)  
 • Update-fähig über GitHub Releases  
 • Saubere Logs und klare Statusmeldungen  
+ Installations-Wizard (eduxel install --wizard)  
+ eduxel doctor fuer Systemdiagnose  
+ Logrotation + eduxel logs --tail  
+ Auto-Updates via systemd-timer  
+ Canary-Updates auf separatem Port  
 
 ---
 
@@ -78,6 +83,12 @@ Diese Optionen betreffen den Bootstrap-Installer selbst:
 
 Diese Optionen werden direkt an die Java-Anwendung weitergereicht:
 
+ --wizard  
+  Interaktiver Wizard fuer Domain, DB, Webstack, Repo, Branch  
+
+ --app-port PORT  
+  Port fuer den Credential Server  
+
 • --domain DOMAIN  
   Domain für Web- und HTTPS-Setup  
 
@@ -106,10 +117,12 @@ Wichtige Befehle:
 
 • systemctl status eduxel  
 • systemctl restart eduxel  
-• journalctl -u eduxel -f  
+• eduxel logs --tail  
 
 CLI verwenden:
 
+ eduxel logs  
+ eduxel doctor  
 • eduxel info  
 • eduxel install  
 • eduxel update  
@@ -138,6 +151,10 @@ eduxel update
 
 **Features:**
 
+ **Changelog**: Release Notes vor Updates anzeigen  
+ **Config-Diff**: Vergleich mit letztem Backup  
+ **Canary-Update**: Startet Canary-Instanz auf separatem Port  
+ **Auto-Updates**: systemd Timer fuer Updates  
 • **Versionsprüfung**: Checkt ob eine neue Version verfügbar ist  
 • **Änderungserkennung**: Erkennt automatisch, was sich geändert hat:
   - Landing Page (HTML/CSS/JS Updates)
@@ -148,6 +165,20 @@ eduxel update
 • **Check-Only Modus**: Mit `--check-only` nur prüfen, keine Änderungen durchführen
 
 **Beispiele:**
+
+```bash
+# Auto-Updates aktivieren (taeglich)
+eduxel update --enable-timer
+
+# Auto-Updates deaktivieren
+eduxel update --disable-timer
+
+# Canary-Release auf Port 45822 starten
+eduxel update --canary --canary-port 45822
+
+# Changelog explizit anzeigen
+eduxel update --show-changelog
+```
 
 ```bash
 # Interaktiv: Änderungen anzeigen und bestätigen
